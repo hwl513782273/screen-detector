@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.app/
+框选屏幕检测工具_v*_自检报告.html
