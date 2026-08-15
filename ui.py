@@ -47,6 +47,11 @@ from ocr_utils import recognize_text, text_matches, vision_available, _normalize
 # 更新日志（"关于"弹窗展示）
 # ---------------------------------------------------------------------------
 CHANGELOG = [
+    ("v6.49.2", "新增版权与开源许可证信息", [
+        "在 App 的 Info.plist 加入版权字段（NSHumanReadableCopyright）：Copyright © 2026 banqiu，基于 MIT 许可证开源。",
+        "『关于』弹窗新增版权与许可证说明行；仓库根目录新增 MIT LICENSE 文件。",
+        "功能与 v6.49.1 完全一致（窗口固定 880×1016、Intel x86_64 兼容包、基础 arm64 包 LSMin 11.0）。",
+    ]),
     ("v6.49", "按截图布局重排 + 窗口固定大小", [
         "按用户截图精确重排：左栏为监控区域/监控预览/运行日志/默认提示音/检测状态；右栏从上到下为检测图案(397×476)、检测模式/文字(397×269)、检测节奏/参数(397×96)。",
         "检测节奏/参数中『间隔(s)』『冷却(s)』输入框加最小宽度，修复被压缩成省略号的问题。",
@@ -740,7 +745,7 @@ class MainWindow(QMainWindow):
 
     # ---------------- UI ----------------
     def _init_ui(self):
-        self.setWindowTitle("框选屏幕检测工具 v6.49")
+        self.setWindowTitle("框选屏幕检测工具 v6.49.2")
         # 用户要求：整体窗口固定大小，禁止缩放（880×1016）。
         self.setFixedSize(880, 1016)
 
@@ -1210,7 +1215,7 @@ class MainWindow(QMainWindow):
         dlg.setMinimumSize(520, 420)
         v = QVBoxLayout(dlg)
         intro = QLabel(
-            "<b>框选屏幕检测工具 v6.49</b><br>"
+            "<b>框选屏幕检测工具 v6.49.2</b><br>"
             "框选屏幕/窗口区域，截取图案作为模板，持续监控；"
             "图案出现即播放提示音，并可对每个响铃标记『命中/误报』以自学习降误判。")
         intro.setWordWrap(True)
@@ -1225,6 +1230,11 @@ class MainWindow(QMainWindow):
             html += "</ul>"
         te.setHtml(html)
         v.addWidget(te, 1)
+        copyright_lbl = QLabel(
+            "Copyright © 2026 banqiu · 基于 MIT 许可证开源（详见仓库 LICENSE 文件）")
+        copyright_lbl.setStyleSheet("color:#9aa3b2;font-size:12px;")
+        copyright_lbl.setWordWrap(True)
+        v.addWidget(copyright_lbl)
         close = QPushButton("关闭")
         close.clicked.connect(dlg.accept)
         v.addWidget(close)

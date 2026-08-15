@@ -3,10 +3,10 @@
 import os
 # 兼容构建开关（不影响默认 v6.49 的 arm64 构建）：
 #   COMPAT_ARCH      : EXE 的目标架构，默认 None（跟随当前机器=arm64）；兼容包设 'x86_64'
-#   COMPAT_VERSION   : CFBundleShortVersionString，默认 '6.49'
+#   COMPAT_VERSION   : CFBundleShortVersionString，默认 '6.49.2'
 #   COMPAT_MIN_SYS   : LSMinimumSystemVersion，默认 '11.0'（arm64 实际最低系统；10.15 仅 Intel 兼容包使用）
 COMPAT_ARCH = os.environ.get("COMPAT_ARCH", None)
-COMPAT_VERSION = os.environ.get("COMPAT_VERSION", "6.49")
+COMPAT_VERSION = os.environ.get("COMPAT_VERSION", "6.49.2")
 COMPAT_MIN_SYS = os.environ.get("COMPAT_MIN_SYS", "11.0")
 from PyInstaller.utils.hooks import collect_submodules
 
@@ -71,6 +71,7 @@ app = BUNDLE(
         "CFBundleDisplayName": "框选屏幕检测工具",
         "CFBundleName": "ScreenDetector",
         "CFBundleShortVersionString": COMPAT_VERSION,
+        "NSHumanReadableCopyright": "Copyright © 2026 banqiu. Released under the MIT License.",
         "NSHighResolutionCapable": True,
         "NSPrincipalClass": "NSApplication",
         "LSMinimumSystemVersion": COMPAT_MIN_SYS,
