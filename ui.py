@@ -47,10 +47,10 @@ from ocr_utils import recognize_text, text_matches, vision_available, _normalize
 # 更新日志（"关于"弹窗展示）
 # ---------------------------------------------------------------------------
 CHANGELOG = [
-    ("v6.49", "按截图布局重排 + 窗口可缩放固定比例", [
+    ("v6.49", "按截图布局重排 + 窗口固定大小", [
         "按用户截图精确重排：左栏为监控区域/监控预览/运行日志/默认提示音/检测状态；右栏从上到下为检测图案(397×476)、检测模式/文字(397×269)、检测节奏/参数(397×96)。",
         "检测节奏/参数中『间隔(s)』『冷却(s)』输入框加最小宽度，修复被压缩成省略号的问题。",
-        "整体窗口改为可缩放但固定长宽比 880:1016（原 setFixedSize 改为 setMinimumSize + resize + resizeEvent 锁定比例）。",
+        "整体窗口固定大小为 880×1016（setFixedSize），禁止用户缩放，布局精确还原截图。",
         "功能逻辑不变（暂停/启动响铃、匹配模式、目标文字、参与检测勾选、各文字独立提示音、框选即预览、命中跟随等）。",
     ]),
     ("v6.48", "修复检测图案详情区截断与整体布局", [
@@ -741,10 +741,8 @@ class MainWindow(QMainWindow):
     # ---------------- UI ----------------
     def _init_ui(self):
         self.setWindowTitle("框选屏幕检测工具 v6.49")
-        # 用户要求：整体窗口可缩放，但固定长宽比（880:1016）。
-        # 改为 setMinimumSize + resize，并重写 resizeEvent 锁定比例；不再 setFixedSize。
-        self.setMinimumSize(660, 762)
-        self.resize(880, 1016)
+        # 用户要求：整体窗口固定大小，禁止缩放（880×1016）。
+        self.setFixedSize(880, 1016)
 
         cw = QWidget(); cw.setObjectName("centralWidget")
         self.setCentralWidget(cw)
@@ -2517,18 +2515,7 @@ class MainWindow(QMainWindow):
         e.accept()
 
     def resizeEvent(self, e):
-        # 用户要求：整体可缩放但固定长宽比 880:1016（约 0.866）。
-        # 以宽度为基准计算高度；避免 resizeEvent 内又触发 resize 死循环，
-        # 用 blockSignals / 直接改高度而非再 resize 整窗。
-        if getattr(self, "_resizing", False) or e is None:
-            return super().resizeEvent(e)
-        ratio = 880.0 / 1016.0
-        new_w = e.size().width()
-        new_h = int(round(new_w / ratio))
-        if new_h != self.height() or new_w != self.width():
-            self._resizing = True
-            self.resize(new_w, new_h)
-            self._resizing = False
+        # 窗口已 setFixedSize(880, 1016)，禁止用户缩放，不再做比例锁定。
         return super().resizeEvent(e)
 
 
