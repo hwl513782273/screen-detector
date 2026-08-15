@@ -1,4 +1,4 @@
-# 框选屏幕检测工具 v6.48（Screen Pattern Detector）
+# 框选屏幕检测工具 v6.49（Screen Pattern Detector）
 
 一个 macOS 原生（`.app` 打包进 `.dmg`）小工具：框选屏幕上任意区域，截取要找的
 图案作为模板（或直接设定目标文字），**持续监控**该区域；当这些图案/文字再次出现时
@@ -35,17 +35,17 @@
 4. 在「检测模式」里选匹配模式；若用文字，设定目标文字与提示音。
 5. 点「开始检测」：监控区命中即响铃；用「命中 / 误报」反馈优化识别。
 
-## 发行包说明（v6.48）
+## 发行包说明（v6.49）
 
 仓库「发行版 / Releases」提供以下包：
 
 | 包 | 架构 | 最低系统 | 说明 |
 |---|---|---|---|
-| `框选屏幕检测工具_6.48.dmg` | arm64 | macOS 12+ | 基础版，Apple Silicon 原生 |
-| `10.15_框选屏幕检测工具_v6.48.dmg` | x86_64 | macOS 10.15+ | 兼容旧系统；Apple Silicon 需 Rosetta 2 |
-| `12_框选屏幕检测工具_v6.48.dmg` | arm64 | macOS 12+ | 兼容包（与基础版同源） |
+| `框选屏幕检测工具_6.49.dmg` | arm64 | macOS 12+ | 基础版，Apple Silicon 原生 |
+| `10.15_框选屏幕检测工具_v6.49.dmg` | x86_64 | macOS 10.15+ | 兼容旧系统；Apple Silicon 需 Rosetta 2 |
+| `12_框选屏幕检测工具_v6.49.dmg` | arm64 | macOS 12+ | 兼容包（与基础版同源） |
 
-> 源码见 `v6.48` 标签；兼容包由同一套源码经 `COMPAT_ARCH` / `COMPAT_MIN_SYS` 环境变量
+> 源码见 `v6.49` 标签；兼容包由同一套源码经 `COMPAT_ARCH` / `COMPAT_MIN_SYS` 环境变量
 > 注入构建，源码零改动。
 
 ## 从源码构建
@@ -54,7 +54,7 @@
 
 ```bash
 cd screen_detector
-bash build.sh            # 默认按 v6.48 行为构建（arm64 / 12+）
+bash build.sh            # 默认按 v6.49 行为构建（arm64 / 12+）
 # 兼容包构建（另见 build_compat.sh）：
 #   COMPAT_ARCH=x86_64 COMPAT_MIN_SYS=10.15 bash build.sh
 ```
@@ -62,6 +62,6 @@ bash build.sh            # 默认按 v6.48 行为构建（arm64 / 12+）
 一键发布（提交 + 打标签）：
 
 ```bash
-bash git_release.sh 6.48 "本次改动说明"
+bash git_release.sh 6.49 "本次改动说明"
 git push origin main --tags
 ```

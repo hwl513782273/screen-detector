@@ -47,6 +47,12 @@ from ocr_utils import recognize_text, text_matches, vision_available, _normalize
 # 更新日志（"关于"弹窗展示）
 # ---------------------------------------------------------------------------
 CHANGELOG = [
+    ("v6.49", "按截图布局重排 + 窗口可缩放固定比例", [
+        "按用户截图精确重排：左栏为监控区域/监控预览/运行日志/默认提示音/检测状态；右栏从上到下为检测图案(397×476)、检测模式/文字(397×269)、检测节奏/参数(397×96)。",
+        "检测节奏/参数中『间隔(s)』『冷却(s)』输入框加最小宽度，修复被压缩成省略号的问题。",
+        "整体窗口改为可缩放但固定长宽比 880:1016（原 setFixedSize 改为 setMinimumSize + resize + resizeEvent 锁定比例）。",
+        "功能逻辑不变（暂停/启动响铃、匹配模式、目标文字、参与检测勾选、各文字独立提示音、框选即预览、命中跟随等）。",
+    ]),
     ("v6.48", "修复检测图案详情区截断与整体布局", [
         "保持窗口 880×963 不变。",
         "将右栏『检测图案』详情区从水平布局改为垂直布局：预览图在上、表单在下，彻底解决名称/阈值/匹配度/提示音等文字和按钮的截断、重叠问题。",
@@ -667,7 +673,7 @@ QCheckBox { spacing: 5px; color: #1d1d1f; font-size: 12px; }
 QSlider::groove:horizontal { background: #d2d2d7; height: 4px; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: #0071e3; border-radius: 2px; }
 QSlider::handle:horizontal { background: #ffffff; border: 1px solid #b0b0b8; width: 12px; height: 12px; border-radius: 6px; margin-top: -4px; margin-bottom: -4px; }
-/* 检测状态分组 387×140，单独收紧标题区与内边距，内部内容宽松不重叠 */
+/* 检测状态分组 447×155，单独收紧标题区与内边距，内部内容宽松不重叠 */
 QGroupBox#statusGroup { margin-top: 12px; padding: 8px 6px 6px 6px; }
 QGroupBox#statusGroup::title { top: 0px; }
 """
@@ -734,9 +740,11 @@ class MainWindow(QMainWindow):
 
     # ---------------- UI ----------------
     def _init_ui(self):
-        self.setWindowTitle("框选屏幕检测工具 v6.48")
-        # 用户授权：窗口 880（宽不变）×963（高），把增加的高度用于加高「检测状态」分组，保证显示正常
-        self.setFixedSize(880, 963)
+        self.setWindowTitle("框选屏幕检测工具 v6.49")
+        # 用户要求：整体窗口可缩放，但固定长宽比（880:1016）。
+        # 改为 setMinimumSize + resize，并重写 resizeEvent 锁定比例；不再 setFixedSize。
+        self.setMinimumSize(660, 762)
+        self.resize(880, 1016)
 
         cw = QWidget(); cw.setObjectName("centralWidget")
         self.setCentralWidget(cw)
@@ -767,7 +775,9 @@ class MainWindow(QMainWindow):
         lv.setSpacing(10)
 
         g_app = QGroupBox("监控区域")
+        g_app.setFixedSize(447, 90)
         app_l = QVBoxLayout(g_app)
+        app_l.setContentsMargins(8, 10, 8, 8)
         row = QHBoxLayout()
         self.btn_region = QPushButton("① 框选监控区域")
         self.btn_region.setProperty("class", "primary")
@@ -779,14 +789,18 @@ class MainWindow(QMainWindow):
         lv.addWidget(g_app)
 
         g_mon = QGroupBox("监控预览")
+        g_mon.setFixedSize(447, 319)
         mon_l = QVBoxLayout(g_mon)
+        mon_l.setContentsMargins(8, 10, 8, 8)
+        mon_l.setSpacing(6)
         well = QWidget()
         well_grid = QGridLayout(well)
         well_grid.setContentsMargins(0, 0, 0, 0)
         well_grid.setSpacing(0)
         self.preview = QLabel("开始检测后显示实时画面")
         self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setFixedSize(432, 160)
+        self.preview.setMinimumSize(400, 200)
+        self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview.setObjectName("previewWell")
         well_grid.addWidget(self.preview, 0, 0)
         g_feedback = QGroupBox("命中确认")
@@ -861,17 +875,37 @@ class MainWindow(QMainWindow):
         self.btn_pv_reset.clicked.connect(self._reset_preview_view)
         lv.addWidget(g_mon)
 
-        # 用户要求：把「运行日志」从右栏移到左栏（原检测图案位置）；宽度自适应撑满左栏
+        # 运行日志在左栏，宽度自适应撑满左栏（447），高度随左栏剩余空间自适应
         g_log = QGroupBox("运行日志")
+        g_log.setMinimumWidth(447)
+        g_log.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         logl = QVBoxLayout(g_log)
-        # 用户授权：运行日志固定 215 高度；移到左栏后宽度自适应撑满，不再固定 387
-        g_log.setFixedHeight(215)
-        g_log.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        logl.setContentsMargins(8, 10, 8, 8)
         self.log = QListWidget()
         self.log.setMinimumHeight(120)
         self.log.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         logl.addWidget(self.log)
         lv.addWidget(g_log)
+
+        # 用户要求：默认提示音在左栏（运行日志下方、检测状态上方），尺寸 447×70
+        g_snd = QGroupBox("默认提示音")
+        g_snd.setFixedSize(447, 70)
+        s_l = QHBoxLayout(g_snd)
+        s_l.setContentsMargins(8, 10, 8, 8)
+        s_l.setSpacing(6)
+        self.snd_combo = QComboBox()
+        self.snd_combo.addItems(self.sound.names + ["自定义…"])
+        self.snd_combo.setToolTip("全局默认提示音。当图案/文字均未单独指定提示音时，一律以此声音响铃。")
+        self.snd_combo.setFixedHeight(22)
+        self.btn_browse_sound = QPushButton("浏览…")
+        self.btn_test = QPushButton("测试")
+        self.btn_browse_sound.setFixedHeight(22)
+        self.btn_test.setFixedHeight(22)
+        s_l.addWidget(self.snd_combo, 1)
+        s_l.addWidget(self.btn_browse_sound)
+        s_l.addWidget(self.btn_test)
+        self._custom_sound_path = ""
+        lv.addWidget(g_snd)
 
         # ---------- 右栏 ----------
         right = QWidget()
@@ -879,8 +913,47 @@ class MainWindow(QMainWindow):
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(6)
 
+        # 用户要求：检测图案放在右栏最上面
+        g_tpl = QGroupBox("检测图案")
+        g_tpl.setFixedSize(397, 476)
+        tpl_l = QVBoxLayout(g_tpl)
+        tpl_l.setContentsMargins(8, 10, 8, 8)
+        tpl_l.setSpacing(5)
+        self.tpl_list = QListWidget()
+        # 列表高度适中，保证详情区有足够空间
+        self.tpl_list.setFixedHeight(70)
+        self.tpl_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.tpl_list.itemChanged.connect(self._on_tpl_item_changed)
+        tpl_l.addWidget(self.tpl_list)
+        self.tpl_hint = QLabel("勾选=参与检测；Cmd/Ctrl/Shift 多选批量删除/重置")
+        self.tpl_hint.setObjectName("hint")
+        self.tpl_hint.setStyleSheet("margin-top:0px;margin-bottom:0px;padding:0px;")
+        self.tpl_hint.setFixedHeight(18)
+        tpl_l.addWidget(self.tpl_hint)
+        tpl_btns = QHBoxLayout()
+        self.btn_add = QPushButton("＋ 框选添加")
+        self.btn_load = QPushButton("从图片载入")
+        self.btn_del = QPushButton("删除选中")
+        self.btn_reset = QPushButton("重置学习")
+        tpl_btns.addWidget(self.btn_add)
+        tpl_btns.addWidget(self.btn_load)
+        tpl_btns.addWidget(self.btn_del)
+        tpl_btns.addWidget(self.btn_reset)
+        tpl_l.addLayout(tpl_btns)
+        self.detail = QWidget()
+        # 详情区改为「预览在上、表单在下」的垂直布局，需要更多高度；
+        # 宽度不再受挤压，文字/按钮不再截断重叠。
+        self.detail.setMinimumHeight(260)
+        tpl_l.addWidget(self.detail, 1)
+        self._build_detail()
+        # 检测图案放在右栏最上面
+        rv.addWidget(g_tpl)
+
         g_text = QGroupBox("检测模式 / 文字")
+        # 用户标注：检测模式/文字固定 397×269，内部「各文字提示音」列表显示两行。
+        g_text.setFixedSize(397, 269)
         tx_l = QVBoxLayout(g_text)
+        tx_l.setContentsMargins(8, 10, 8, 8)
         mode_row = QHBoxLayout()
         self.combo_match_mode = QComboBox()
         self.combo_match_mode.addItems(["仅图案", "仅文字", "文字优先·图案兜底"])
@@ -905,31 +978,35 @@ class MainWindow(QMainWindow):
         tx_l.addLayout(tx_row2)
         tx_l.addWidget(QLabel("各文字提示音（每行一个文字）:"))
         self.text_snd_list = QListWidget()
-        # 每次只完整显示一行文字提示音，其余项通过垂直滚动条查看
-        # 窗口加高后，文字提示音列表多留一点可视行
-        self.text_snd_list.setFixedHeight(70)
+        # 用户要求：各文字提示音显示两个可见行，其余项通过垂直滚动条下拉查看。
+        # 每行高度 34px，两行固定 68px；宽度自适应撑满分组。
+        self.text_snd_list.setFixedHeight(68)
         self.text_snd_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_snd_list.setToolTip("为每个文字单独指定提示音；未指定则用最下方全局默认提示音")
         tx_l.addWidget(self.text_snd_list)
         self._text_snd_combos = {}
-        # 给「匹配/目标/文字匹配」三行足够高度，避免标签/输入框被截断；
-        # 为检测图案详情区（改为垂直布局）腾出纵向空间，适度压缩本区。
-        g_text.setMinimumHeight(170)
+        # 右栏顺序：检测图案(g_tpl，在最上面) → 检测模式/文字(g_text) → 检测节奏/参数(g_param，最下)
         rv.addWidget(g_text)
 
         g_param = QGroupBox("检测节奏 / 参数")
+        # 用户要求：检测节奏/参数固定 397×96，放到右栏最底部
+        g_param.setFixedSize(397, 96)
         p_l = QVBoxLayout(g_param)
+        p_l.setContentsMargins(8, 10, 8, 8)
         p_row = QHBoxLayout()
         p_row.addWidget(QLabel("间隔(s):"))
         self.spin_interval = QSpinBox()
         self.spin_interval.setRange(1, 300)
         self.spin_interval.setValue(1)
+        # 397×83 总高内，QSpinBox 易被布局压缩成省略号；固定最小宽度保证数字可见
+        self.spin_interval.setMinimumWidth(50)
         self.spin_interval.setToolTip("每多少秒执行一次检测（OCR 文字检测 + 图案匹配）")
         p_row.addWidget(self.spin_interval)
         p_row.addWidget(QLabel("冷却(s):"))
         self.spin_cooldown = QSpinBox()
         self.spin_cooldown.setRange(1, 60)
         self.spin_cooldown.setValue(3)
+        self.spin_cooldown.setMinimumWidth(50)
         p_row.addWidget(self.spin_cooldown)
         p_row.addStretch(1)
         self.chk_ms = QCheckBox("多尺度匹配")
@@ -938,32 +1015,11 @@ class MainWindow(QMainWindow):
         p_l.addLayout(p_row)
         rv.addWidget(g_param)
 
-        g_snd = QGroupBox("默认提示音")
-        # 压缩默认提示音分组高度，把空间让给改为垂直布局的检测图案详情区。
-        g_snd.setFixedSize(387, 70)
-        s_l = QHBoxLayout(g_snd)
-        s_l.setContentsMargins(8, 10, 8, 8)
-        s_l.setSpacing(6)
-        self.snd_combo = QComboBox()
-        self.snd_combo.addItems(self.sound.names + ["自定义…"])
-        self.snd_combo.setToolTip("全局默认提示音。当图案/文字均未单独指定提示音时，一律以此声音响铃。")
-        # 固定下拉高度：避免 85px 总高内被布局压缩导致文字截断
-        self.snd_combo.setFixedHeight(22)
-        self.btn_browse_sound = QPushButton("浏览…")
-        self.btn_test = QPushButton("测试")
-        self.btn_browse_sound.setFixedHeight(22)
-        self.btn_test.setFixedHeight(22)
-        s_l.addWidget(self.snd_combo, 1)
-        s_l.addWidget(self.btn_browse_sound)
-        s_l.addWidget(self.btn_test)
-        self._custom_sound_path = ""
-        rv.addWidget(g_snd)
-
         g_status = QGroupBox("检测状态")
         self.g_status = g_status
         g_status.setObjectName("statusGroup")
-        # 检测状态保持足够高度；为检测图案详情区（垂直布局）适度让出空间。
-        g_status.setFixedSize(387, 155)
+        # 用户要求：检测状态从右栏移到底部左栏，尺寸 447×155
+        g_status.setFixedSize(447, 155)
         st_l = QVBoxLayout(g_status)
         # 387×165 包含分组标题与边框；样式表已单独为 #statusGroup 收紧标题/边距
         st_l.setContentsMargins(6, 8, 6, 8)
@@ -1020,39 +1076,9 @@ class MainWindow(QMainWindow):
         ring_h.addWidget(self.combo_ring_resume, 1)
         ring_h.addWidget(self.spin_ring_seconds)
         st_l.addLayout(ring_h)
-        rv.addWidget(g_status)
+        # 检测状态从右栏移到底部左栏
+        lv.addWidget(g_status)
 
-        # 用户要求：把「检测图案」从左栏移到右栏（原运行日志位置）
-        g_tpl = QGroupBox("检测图案")
-        tpl_l = QVBoxLayout(g_tpl)
-        self.tpl_list = QListWidget()
-        # 列表适度压缩，为垂直布局的详情区腾出空间
-        self.tpl_list.setFixedHeight(50)
-        self.tpl_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.tpl_list.itemChanged.connect(self._on_tpl_item_changed)
-        tpl_l.addWidget(self.tpl_list)
-        self.tpl_hint = QLabel("勾选=参与检测；Cmd/Ctrl/Shift 多选批量删除/重置")
-        self.tpl_hint.setObjectName("hint")
-        self.tpl_hint.setStyleSheet("margin-top:0px;margin-bottom:0px;padding:0px;")
-        self.tpl_hint.setFixedHeight(18)
-        tpl_l.addWidget(self.tpl_hint)
-        tpl_btns = QHBoxLayout()
-        self.btn_add = QPushButton("＋ 框选添加")
-        self.btn_load = QPushButton("从图片载入")
-        self.btn_del = QPushButton("删除选中")
-        self.btn_reset = QPushButton("重置学习")
-        tpl_btns.addWidget(self.btn_add)
-        tpl_btns.addWidget(self.btn_load)
-        tpl_btns.addWidget(self.btn_del)
-        tpl_btns.addWidget(self.btn_reset)
-        tpl_l.addLayout(tpl_btns)
-        self.detail = QWidget()
-        # 详情区改为「预览在上、表单在下」的垂直布局，需要更多高度；
-        # 宽度不再受挤压，文字/按钮不再截断重叠。
-        self.detail.setMinimumHeight(170)
-        tpl_l.addWidget(self.detail)
-        self._build_detail()
-        rv.addWidget(g_tpl, 1)
 
         root.addWidget(left, 5)
         root.addWidget(right, 4)
@@ -1102,7 +1128,7 @@ class MainWindow(QMainWindow):
 
         # 上方：图案预览（占满右栏宽度，高度固定，避免与表单抢水平空间）
         self.det_preview = QLabel("（选中后预览）")
-        self.det_preview.setFixedHeight(74)
+        self.det_preview.setFixedHeight(120)
         self.det_preview.setMinimumWidth(200)
         self.det_preview.setAlignment(Qt.AlignCenter)
         self.det_preview.setStyleSheet("background:#1b1b1b;border:1px solid #444;color:#888;")
@@ -1186,7 +1212,7 @@ class MainWindow(QMainWindow):
         dlg.setMinimumSize(520, 420)
         v = QVBoxLayout(dlg)
         intro = QLabel(
-            "<b>框选屏幕检测工具 v6.48</b><br>"
+            "<b>框选屏幕检测工具 v6.49</b><br>"
             "框选屏幕/窗口区域，截取图案作为模板，持续监控；"
             "图案出现即播放提示音，并可对每个响铃标记『命中/误报』以自学习降误判。")
         intro.setWordWrap(True)
@@ -1253,7 +1279,7 @@ class MainWindow(QMainWindow):
             self.det_preview.setPixmap(QPixmap())
             return
         # 详情区预览图现在占满右栏宽度（约 340px），按预览区尺寸缩放。
-        pm = numpy_to_pixmap(img, 340, 74)
+        pm = numpy_to_pixmap(img, 340, 120)
         self.det_preview.setPixmap(pm)
 
     # ---------------- 配置 ----------------
@@ -2489,6 +2515,21 @@ class MainWindow(QMainWindow):
         self._stop_detect()
         self._save_config()
         e.accept()
+
+    def resizeEvent(self, e):
+        # 用户要求：整体可缩放但固定长宽比 880:1016（约 0.866）。
+        # 以宽度为基准计算高度；避免 resizeEvent 内又触发 resize 死循环，
+        # 用 blockSignals / 直接改高度而非再 resize 整窗。
+        if getattr(self, "_resizing", False) or e is None:
+            return super().resizeEvent(e)
+        ratio = 880.0 / 1016.0
+        new_w = e.size().width()
+        new_h = int(round(new_w / ratio))
+        if new_h != self.height() or new_w != self.width():
+            self._resizing = True
+            self.resize(new_w, new_h)
+            self._resizing = False
+        return super().resizeEvent(e)
 
 
 def main():
