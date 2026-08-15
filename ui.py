@@ -5,7 +5,7 @@
 功能：
   - 手动"框选监控区域"（唯一监控区域来源；已移除「抓取应用窗口」来源）
   - 多模板管理（增 / 删 / 改名 / 启停 / 预览 / 重置学习），非一键清空
-  - 检测状态机：图案出现 -> 响铃；消失 -> 自动停铃；手动『暂停响铃/命中/误报』-> 暂停响铃，需点『启动响铃』手动恢复
+  - 检测状态机：图案出现 -> 响铃；消失 -> 自动停铃；手动『暂停响铃/命中/误报』-> 暂停响铃；可在「检测状态」区切换响铃恢复方式（手动恢复 / 下次新命中自动恢复 / 自定义秒数后自动恢复）
   - 命中反馈（命中 / 误报）驱动自学习，动态调整阈值并精炼模板
 """
 from __future__ import annotations
@@ -47,6 +47,12 @@ from ocr_utils import recognize_text, text_matches, vision_available, _normalize
 # 更新日志（"关于"弹窗展示）
 # ---------------------------------------------------------------------------
 CHANGELOG = [
+    ("v6.48", "修复检测图案详情区截断与整体布局", [
+        "保持窗口 880×963 不变。",
+        "将右栏『检测图案』详情区从水平布局改为垂直布局：预览图在上、表单在下，彻底解决名称/阈值/匹配度/提示音等文字和按钮的截断、重叠问题。",
+        "压缩『默认提示音』和『检测节奏/参数』分组高度，把空间让给详情区；多尺度匹配勾选与间隔/冷却放到同一行。",
+        "功能逻辑不变（暂停/启动响铃、匹配模式、目标文字、参与检测勾选、各文字独立提示音、框选即预览、命中跟随等）。",
+    ]),
     ("v6.47", "修复监控预览以中心为锚点缩放", [
         "保持窗口 880×890 不变。",
         "修复 v6.46 缩小时画面偏向左上角的问题：改为以画面中心对齐预览区中心为基准，缩小时从中心向四周均匀收缩，四周同时出现黑边。",
@@ -661,6 +667,9 @@ QCheckBox { spacing: 5px; color: #1d1d1f; font-size: 12px; }
 QSlider::groove:horizontal { background: #d2d2d7; height: 4px; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: #0071e3; border-radius: 2px; }
 QSlider::handle:horizontal { background: #ffffff; border: 1px solid #b0b0b8; width: 12px; height: 12px; border-radius: 6px; margin-top: -4px; margin-bottom: -4px; }
+/* 检测状态分组 387×140，单独收紧标题区与内边距，内部内容宽松不重叠 */
+QGroupBox#statusGroup { margin-top: 12px; padding: 8px 6px 6px 6px; }
+QGroupBox#statusGroup::title { top: 0px; }
 """
 
 
@@ -686,7 +695,12 @@ class MainWindow(QMainWindow):
         self._suppress_tpl_item_changed = False  # 重建列表时屏蔽 itemChanged
         self.overlay = None
         self._last_debug = {}
-        self.paused = False          # 暂停响铃：手动暂停/反馈后静音，需点『启动响铃』手动恢复
+        self.paused = False          # 暂停响铃：手动暂停/反馈后静音
+        # 响铃恢复方式（三态）：0=手动恢复（点『启动响铃』）；1=下次新命中自动恢复（默认）；2=暂停 N 秒后自动解除暂停
+        self.ring_resume_mode = 1
+        self.ring_resume_seconds = 10  # mode==2 时的自动解除秒数（用户可自定义 1-600）
+        self._resume_timer = None    # N 秒自动解除暂停用的 QTimer（仅 mode==2 时启用）
+        self._prev_matched = False   # 上一帧 matched 状态，用于识别「新一轮命中（上升沿）」以支撑自动恢复
         self._ring_sound = "Ping"     # 当前响铃使用的声音名（按命中来源确定）
         self._ring_custom = ""        # 当前响铃使用的自定义声音路径
         self._text_sounds = {}        # 各文字独立提示音映射：{文字: 声音名, ...}（空值=用最下方全局默认）
@@ -701,6 +715,8 @@ class MainWindow(QMainWindow):
         self._text_detected = False
         # 监控预览视图状态：scale=1.0 表示完整适配 QLabel；offset 为像素平移
         self._preview_scale = 1.0
+        # 框选完成后预览默认缩放倍数：等价于连点 3 下「－」缩小（0.8³ ≈ 0.512），留出整体视野
+        self._preview_default_scale = 0.8 ** 3
         self._preview_offset = QPoint(0, 0)
         self._preview_base_pixmap: Optional[QPixmap] = None
         self._init_ui()
@@ -718,9 +734,9 @@ class MainWindow(QMainWindow):
 
     # ---------------- UI ----------------
     def _init_ui(self):
-        self.setWindowTitle("框选屏幕检测工具 v6.47")
-        # 用户拖动 v6.38 后确认最佳高度 890；固定窗口避免误拖
-        self.setFixedSize(880, 890)
+        self.setWindowTitle("框选屏幕检测工具 v6.48")
+        # 用户授权：窗口 880（宽不变）×963（高），把增加的高度用于加高「检测状态」分组，保证显示正常
+        self.setFixedSize(880, 963)
 
         cw = QWidget(); cw.setObjectName("centralWidget")
         self.setCentralWidget(cw)
@@ -845,33 +861,17 @@ class MainWindow(QMainWindow):
         self.btn_pv_reset.clicked.connect(self._reset_preview_view)
         lv.addWidget(g_mon)
 
-        g_tpl = QGroupBox("检测图案")
-        tpl_l = QVBoxLayout(g_tpl)
-        self.tpl_list = QListWidget()
-        self.tpl_list.setFixedHeight(60)
-        self.tpl_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.tpl_list.itemChanged.connect(self._on_tpl_item_changed)
-        tpl_l.addWidget(self.tpl_list)
-        self.tpl_hint = QLabel("勾选=参与检测；Cmd/Ctrl/Shift 多选批量删除/重置")
-        self.tpl_hint.setObjectName("hint")
-        self.tpl_hint.setStyleSheet("margin-top:0px;margin-bottom:0px;padding:0px;")
-        self.tpl_hint.setFixedHeight(18)
-        tpl_l.addWidget(self.tpl_hint)
-        tpl_btns = QHBoxLayout()
-        self.btn_add = QPushButton("＋ 框选添加")
-        self.btn_load = QPushButton("从图片载入")
-        self.btn_del = QPushButton("删除选中")
-        self.btn_reset = QPushButton("重置学习")
-        tpl_btns.addWidget(self.btn_add)
-        tpl_btns.addWidget(self.btn_load)
-        tpl_btns.addWidget(self.btn_del)
-        tpl_btns.addWidget(self.btn_reset)
-        tpl_l.addLayout(tpl_btns)
-        self.detail = QWidget()
-        self.detail.setMinimumHeight(90)
-        tpl_l.addWidget(self.detail)
-        self._build_detail()
-        lv.addWidget(g_tpl, 1)
+        # 用户要求：把「运行日志」从右栏移到左栏（原检测图案位置）；宽度自适应撑满左栏
+        g_log = QGroupBox("运行日志")
+        logl = QVBoxLayout(g_log)
+        # 用户授权：运行日志固定 215 高度；移到左栏后宽度自适应撑满，不再固定 387
+        g_log.setFixedHeight(215)
+        g_log.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.log = QListWidget()
+        self.log.setMinimumHeight(120)
+        self.log.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        logl.addWidget(self.log)
+        lv.addWidget(g_log)
 
         # ---------- 右栏 ----------
         right = QWidget()
@@ -906,11 +906,15 @@ class MainWindow(QMainWindow):
         tx_l.addWidget(QLabel("各文字提示音（每行一个文字）:"))
         self.text_snd_list = QListWidget()
         # 每次只完整显示一行文字提示音，其余项通过垂直滚动条查看
-        self.text_snd_list.setFixedHeight(58)
+        # 窗口加高后，文字提示音列表多留一点可视行
+        self.text_snd_list.setFixedHeight(70)
         self.text_snd_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_snd_list.setToolTip("为每个文字单独指定提示音；未指定则用最下方全局默认提示音")
         tx_l.addWidget(self.text_snd_list)
         self._text_snd_combos = {}
+        # 给「匹配/目标/文字匹配」三行足够高度，避免标签/输入框被截断；
+        # 为检测图案详情区（改为垂直布局）腾出纵向空间，适度压缩本区。
+        g_text.setMinimumHeight(170)
         rv.addWidget(g_text)
 
         g_param = QGroupBox("检测节奏 / 参数")
@@ -927,19 +931,28 @@ class MainWindow(QMainWindow):
         self.spin_cooldown.setRange(1, 60)
         self.spin_cooldown.setValue(3)
         p_row.addWidget(self.spin_cooldown)
-        p_l.addLayout(p_row)
+        p_row.addStretch(1)
         self.chk_ms = QCheckBox("多尺度匹配")
         self.chk_ms.setChecked(True)
-        p_l.addWidget(self.chk_ms)
+        p_row.addWidget(self.chk_ms)
+        p_l.addLayout(p_row)
         rv.addWidget(g_param)
 
         g_snd = QGroupBox("默认提示音")
+        # 压缩默认提示音分组高度，把空间让给改为垂直布局的检测图案详情区。
+        g_snd.setFixedSize(387, 70)
         s_l = QHBoxLayout(g_snd)
+        s_l.setContentsMargins(8, 10, 8, 8)
+        s_l.setSpacing(6)
         self.snd_combo = QComboBox()
         self.snd_combo.addItems(self.sound.names + ["自定义…"])
         self.snd_combo.setToolTip("全局默认提示音。当图案/文字均未单独指定提示音时，一律以此声音响铃。")
+        # 固定下拉高度：避免 85px 总高内被布局压缩导致文字截断
+        self.snd_combo.setFixedHeight(22)
         self.btn_browse_sound = QPushButton("浏览…")
         self.btn_test = QPushButton("测试")
+        self.btn_browse_sound.setFixedHeight(22)
+        self.btn_test.setFixedHeight(22)
         s_l.addWidget(self.snd_combo, 1)
         s_l.addWidget(self.btn_browse_sound)
         s_l.addWidget(self.btn_test)
@@ -947,24 +960,99 @@ class MainWindow(QMainWindow):
         rv.addWidget(g_snd)
 
         g_status = QGroupBox("检测状态")
+        self.g_status = g_status
+        g_status.setObjectName("statusGroup")
+        # 检测状态保持足够高度；为检测图案详情区（垂直布局）适度让出空间。
+        g_status.setFixedSize(387, 155)
         st_l = QVBoxLayout(g_status)
+        # 387×165 包含分组标题与边框；样式表已单独为 #statusGroup 收紧标题/边距
+        st_l.setContentsMargins(6, 8, 6, 8)
+        st_l.setSpacing(5)
         self.hit_badge = QLabel("待机")
         self.hit_badge.setAlignment(Qt.AlignCenter)
         self.hit_badge.setObjectName("hitBadge")
+        self.hit_badge.setWordWrap(False)
+        # 命中/监控中状态：16px 粗体 + 4px*2 padding = 24px，min 30px 给文字上下各留 3px
+        self.hit_badge.setMinimumHeight(30)
+        self.hit_badge.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         st_l.addWidget(self.hit_badge)
         self.hit_detail = QLabel("开始检测后，这里实时显示是否命中及命中对象")
         self.hit_detail.setObjectName("subText")
         self.hit_detail.setWordWrap(True)
+        # 用 margin-top/bottom 替代 addSpacing；#subText 字号 11px，
+        # 预留 36px 可完整显示两行说明文字，避免「未命中」多行文本被压缩
+        self.hit_detail.setStyleSheet("margin-top:5px;margin-bottom:4px;")
+        self.hit_detail.setFixedHeight(36)
         st_l.addWidget(self.hit_detail)
+        ring_h = QHBoxLayout()
+        ring_h.setSpacing(6)
+        ring_h.addWidget(QLabel("恢复方式："))
+        self.combo_ring_resume = QComboBox()
+        self.combo_ring_resume.addItems([
+            "手动恢复",
+            "新命中自动恢复",
+            "自定义秒数后恢复",
+            "命中跟随（命中响/消失静音）",
+        ])
+        self.combo_ring_resume.setCurrentIndex(1)
+        self.combo_ring_resume.setToolTip(
+            "暂停响铃后的恢复方式：\n"
+            "• 手动恢复：暂停后必须手动点『启动响铃』才恢复。\n"
+            "• 新命中自动恢复（默认）：目标消失再出现（新一轮命中）会自动解除暂停并响铃，不漏新事件。\n"
+            "• 自定义秒数后恢复：暂停起 N 秒倒计时，到点自动解除暂停；右侧数字可自定义 1-600 秒。\n"
+            "• 命中跟随：响铃严格跟随命中状态——命中时自动播放，命中消失时自动静音；"
+            "手动暂停后，下一次命中会自动恢复响铃。")
+        # 加宽下拉，避免「自定义秒数后恢复」等长选项在弹出列表中被截断
+        self.combo_ring_resume.setMinimumWidth(180)
+        # 140px 总高已有余量，下拉框 20px 显示更舒展
+        self.combo_ring_resume.setMinimumHeight(20)
+        self.combo_ring_resume.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContentsOnFirstShow)
+        self.combo_ring_resume.currentIndexChanged.connect(self._on_ring_mode_changed)
+        self.spin_ring_seconds = QSpinBox()
+        self.spin_ring_seconds.setRange(1, 600)
+        self.spin_ring_seconds.setValue(self.ring_resume_seconds)
+        self.spin_ring_seconds.setFixedWidth(70)
+        self.spin_ring_seconds.setMinimumHeight(20)
+        self.spin_ring_seconds.setSuffix(" 秒")
+        self.spin_ring_seconds.setToolTip("自定义自动解除暂停的秒数（仅对『自定义秒数后恢复』生效）")
+        self.spin_ring_seconds.setEnabled(self.combo_ring_resume.currentIndex() == 2)
+        self.spin_ring_seconds.valueChanged.connect(self._on_ring_seconds_changed)
+        ring_h.addWidget(self.combo_ring_resume, 1)
+        ring_h.addWidget(self.spin_ring_seconds)
+        st_l.addLayout(ring_h)
         rv.addWidget(g_status)
 
-        g_log = QGroupBox("学习反馈记录")
-        logl = QVBoxLayout(g_log)
-        self.log = QListWidget()
-        self.log.setMinimumHeight(120)
-        self.log.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        logl.addWidget(self.log)
-        rv.addWidget(g_log)
+        # 用户要求：把「检测图案」从左栏移到右栏（原运行日志位置）
+        g_tpl = QGroupBox("检测图案")
+        tpl_l = QVBoxLayout(g_tpl)
+        self.tpl_list = QListWidget()
+        # 列表适度压缩，为垂直布局的详情区腾出空间
+        self.tpl_list.setFixedHeight(50)
+        self.tpl_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.tpl_list.itemChanged.connect(self._on_tpl_item_changed)
+        tpl_l.addWidget(self.tpl_list)
+        self.tpl_hint = QLabel("勾选=参与检测；Cmd/Ctrl/Shift 多选批量删除/重置")
+        self.tpl_hint.setObjectName("hint")
+        self.tpl_hint.setStyleSheet("margin-top:0px;margin-bottom:0px;padding:0px;")
+        self.tpl_hint.setFixedHeight(18)
+        tpl_l.addWidget(self.tpl_hint)
+        tpl_btns = QHBoxLayout()
+        self.btn_add = QPushButton("＋ 框选添加")
+        self.btn_load = QPushButton("从图片载入")
+        self.btn_del = QPushButton("删除选中")
+        self.btn_reset = QPushButton("重置学习")
+        tpl_btns.addWidget(self.btn_add)
+        tpl_btns.addWidget(self.btn_load)
+        tpl_btns.addWidget(self.btn_del)
+        tpl_btns.addWidget(self.btn_reset)
+        tpl_l.addLayout(tpl_btns)
+        self.detail = QWidget()
+        # 详情区改为「预览在上、表单在下」的垂直布局，需要更多高度；
+        # 宽度不再受挤压，文字/按钮不再截断重叠。
+        self.detail.setMinimumHeight(170)
+        tpl_l.addWidget(self.detail)
+        self._build_detail()
+        rv.addWidget(g_tpl, 1)
 
         root.addWidget(left, 5)
         root.addWidget(right, 4)
@@ -1006,24 +1094,30 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(GLOBAL_QSS)
 
     def _build_detail(self):
-        l = QHBoxLayout(self.detail)
-        l.setContentsMargins(0, 4, 0, 0)
-        l.setSpacing(10)
+        # 检测图案详情区改为垂直布局：预览图在上、表单在下，
+        # 解决右栏窄宽度下水平布局导致的文字/按钮截断重叠问题。
+        l = QVBoxLayout(self.detail)
+        l.setContentsMargins(0, 2, 0, 0)
+        l.setSpacing(4)
 
-        # 左侧：图案预览
+        # 上方：图案预览（占满右栏宽度，高度固定，避免与表单抢水平空间）
         self.det_preview = QLabel("（选中后预览）")
-        self.det_preview.setFixedSize(140, 90)
+        self.det_preview.setFixedHeight(74)
+        self.det_preview.setMinimumWidth(200)
         self.det_preview.setAlignment(Qt.AlignCenter)
         self.det_preview.setStyleSheet("background:#1b1b1b;border:1px solid #444;color:#888;")
         l.addWidget(self.det_preview)
 
-        # 右侧：表单
+        # 下方：表单（独占整栏宽度，不再有水平挤压）
         form = QVBoxLayout()
-        form.setSpacing(4)
+        form.setSpacing(3)
+        form.setContentsMargins(0, 0, 0, 0)
 
         row1 = QHBoxLayout()
+        row1.setSpacing(4)
         row1.addWidget(QLabel("名称:"))
         self.det_name = QLineEdit()
+        self.det_name.setFixedHeight(20)
         row1.addWidget(self.det_name, 1)
         self.det_enabled = QCheckBox("参与检测")
         self.det_enabled.setChecked(True)
@@ -1031,6 +1125,7 @@ class MainWindow(QMainWindow):
         form.addLayout(row1)
 
         row2 = QHBoxLayout()
+        row2.setSpacing(4)
         row2.addWidget(QLabel("基准阈值:"))
         self.det_thr = QSlider(Qt.Horizontal)
         self.det_thr.setRange(20, 99)
@@ -1041,6 +1136,7 @@ class MainWindow(QMainWindow):
         form.addLayout(row2)
 
         row3 = QHBoxLayout()
+        row3.setSpacing(8)
         self.det_eff = QLabel("有效阈值: -")
         self.det_stats = QLabel("学习: 命中0 误报0")
         row3.addWidget(self.det_eff)
@@ -1048,21 +1144,26 @@ class MainWindow(QMainWindow):
         form.addLayout(row3)
 
         row4 = QHBoxLayout()
+        row4.setSpacing(4)
         self.det_live = QLabel("当前最佳匹配度: -")
         self.det_live.setStyleSheet("color:#1565c0;")
         self.btn_test_match = QPushButton("测试匹配")
         self.btn_test_match.setToolTip("立即用当前模板匹配一次监控区域，并把结果写入日志")
         self.btn_save_img = QPushButton("保存图片")
         self.btn_save_img.setToolTip("把当前选中模板导出为 PNG 保存到任意位置")
+        self.btn_test_match.setFixedHeight(20)
+        self.btn_save_img.setFixedHeight(20)
         row4.addWidget(self.det_live, 1)
         row4.addWidget(self.btn_test_match)
         row4.addWidget(self.btn_save_img)
         form.addLayout(row4)
 
         row5 = QHBoxLayout()
+        row5.setSpacing(4)
         self.det_sound = QComboBox()
         self.det_sound.addItems(["默认(全局)"] + self.sound.names)
         self.det_sound.setToolTip("为该图案单独指定提示音；选『默认(全局)』则使用全局声音")
+        self.det_sound.setFixedHeight(20)
         row5.addWidget(QLabel("图案提示音:"))
         row5.addWidget(self.det_sound, 1)
         form.addLayout(row5)
@@ -1085,7 +1186,7 @@ class MainWindow(QMainWindow):
         dlg.setMinimumSize(520, 420)
         v = QVBoxLayout(dlg)
         intro = QLabel(
-            "<b>框选屏幕检测工具 v6.47</b><br>"
+            "<b>框选屏幕检测工具 v6.48</b><br>"
             "框选屏幕/窗口区域，截取图案作为模板，持续监控；"
             "图案出现即播放提示音，并可对每个响铃标记『命中/误报』以自学习降误判。")
         intro.setWordWrap(True)
@@ -1109,9 +1210,13 @@ class MainWindow(QMainWindow):
         """工具内实时显示命中状态（徽标 + 说明）。"""
         self.hit_badge.setText(badge_text)
         self.hit_badge.setStyleSheet(
-            f"font-size:18px;font-weight:bold;color:#fff;background:{badge_color};"
-            f"padding:8px;border-radius:8px;")
+            f"font-size:16px;font-weight:bold;color:#fff;background:{badge_color};"
+            f"padding:4px 8px;border-radius:8px;")
         self.hit_detail.setText(detail)
+        # 样式会改变 badge 的 sizeHint，必须刷新布局，否则说明文字可能贴到徽章上
+        self.hit_badge.adjustSize()
+        self.hit_badge.updateGeometry()
+        self.g_status.layout().activate()
 
     def _set_ring_button(self, state: str):
         """统一管理『暂停/启动响铃』按钮的视觉与可用状态。
@@ -1147,7 +1252,8 @@ class MainWindow(QMainWindow):
             self.det_preview.setText("（无预览）")
             self.det_preview.setPixmap(QPixmap())
             return
-        pm = numpy_to_pixmap(img, 180, 120)
+        # 详情区预览图现在占满右栏宽度（约 340px），按预览区尺寸缩放。
+        pm = numpy_to_pixmap(img, 340, 74)
         self.det_preview.setPixmap(pm)
 
     # ---------------- 配置 ----------------
@@ -1190,6 +1296,21 @@ class MainWindow(QMainWindow):
         # 匹配模式（仅图案/仅文字/文字优先·图案兜底）一并落盘，重启后恢复上次选择
         _mm = data.get("match_mode", 1)
         self.combo_match_mode.setCurrentIndex(int(_mm) if isinstance(_mm, int) else 1)
+        # 响铃恢复方式（三态）：默认 1=下次新命中自动恢复；兼容旧配置里的 ring_resume_auto 布尔
+        _mode = data.get("ring_resume_mode", None)
+        if _mode is None:
+            _mode = 1 if bool(data.get("ring_resume_auto", True)) else 0
+        self.ring_resume_mode = int(_mode) if _mode in (0, 1, 2, 3) else 1
+        self.combo_ring_resume.setCurrentIndex(self.ring_resume_mode)
+        # 自定义秒数：默认 10，范围 1-600
+        _secs = data.get("ring_resume_seconds", 10)
+        try:
+            _secs = int(_secs)
+        except Exception:
+            _secs = 10
+        self.ring_resume_seconds = max(1, min(600, _secs))
+        self.spin_ring_seconds.setValue(self.ring_resume_seconds)
+        self.spin_ring_seconds.setEnabled(self.ring_resume_mode == 2)
         # 逐文字提示音映射（{文字: 声音名}），未指定的文字回退最下方全局默认
         self._text_sounds = data.get("text_sounds", {}) or {}
         self._rebuild_text_sound_list()
@@ -1207,6 +1328,8 @@ class MainWindow(QMainWindow):
             "text_mode": self.combo_text_mode.currentIndex(),
             "match_mode": self.combo_match_mode.currentIndex(),
             "text_sounds": self._text_sounds,
+            "ring_resume_mode": self.ring_resume_mode,
+            "ring_resume_seconds": self.ring_resume_seconds,
         }
         self.store.save(self.detector, self.region, params)
 
@@ -1250,6 +1373,12 @@ class MainWindow(QMainWindow):
         self.region = rect
         self._show_region()
         self._reset_preview_view()
+        # 框选后默认把预览缩小到约 3 下「－」缩放，留出整体视野
+        self._preview_scale = self._preview_default_scale
+        # 框选后立即启动预览节拍（独立于检测），无需点『开始检测』即可看到实时画面
+        if not self.preview_timer.isActive():
+            self.preview_timer.setInterval(200)
+            self.preview_timer.start()
         self._log(f"已框选监控区域: {rect}")
 
     def _show_region(self):
@@ -1562,6 +1691,8 @@ class MainWindow(QMainWindow):
         # 重置上一轮可能残留的响铃/暂停状态，确保新一轮从干净状态开始
         self.alerting = False
         self.paused = False
+        self._stop_resume_timer()
+        self._prev_matched = False
         # 重置文字去抖状态，避免上一轮残留的"已确认命中"影响本轮
         self._text_hit_streak = 0
         self._text_miss_streak = 0
@@ -1582,8 +1713,13 @@ class MainWindow(QMainWindow):
     def _stop_detect(self):
         self._detecting = False   # 先置否，丢弃 worker 残留的迟到 tick
         self.detect_timer.stop()
-        self.preview_timer.stop()
+        # 注意：不停 preview_timer——停止检测后监控预览仍持续刷新，
+        # 用户框选后可一直看到实时画面，无需重新点『开始检测』
         self._reset_ring()
+        # 清空上一轮检测残留的框/文字，使停止后的预览为干净的纯实时画面（不带旧框）
+        self._last_results = []
+        self._last_recognized = None
+        self._last_matched_texts = set()
         self.btn_start.setText("▶ 开始检测")
         self.btn_start.setStyleSheet("background:#0071e3;color:#fff;padding:8px;font-weight:bold;")
         self._set_ring_button("stopped")
@@ -1644,14 +1780,14 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(f"⚠ 区域被遮挡，监控持续重试中（已 {elapsed}s）")
         self._set_hit_status("遮挡·重试中", "#f9a825",
                              f"监控区域抓取暂不可用（可能被窗口遮挡），监控持续重试中，已 {elapsed}s。\n"
-                             "遮挡解除后会自动恢复检测与学习反馈记录，无需手动重启。")
+                             "遮挡解除后会自动恢复检测与运行日志，无需手动重启。")
 
     def _on_capture_recovered(self):
-        """抓取从遮挡中恢复：清遮挡计时，并在『学习反馈记录』里记一条恢复日志。"""
+        """抓取从遮挡中恢复：清遮挡计时，并在『运行日志』里记一条恢复日志。"""
         if self._occlusion_since is not None:
             elapsed = int(time.time() - self._occlusion_since)
             self._occlusion_since = None
-            self._log(f"✓ 遮挡解除，检测已恢复（遮挡持续约 {elapsed}s），学习反馈记录继续。")
+            self._log(f"✓ 遮挡解除，检测已恢复（遮挡持续约 {elapsed}s），运行日志继续。")
 
     def _preview_step(self):
         """预览节拍：只抓帧刷新画面（不跑 OCR、不响铃），保证监控画面实时流畅。
@@ -1662,7 +1798,7 @@ class MainWindow(QMainWindow):
           - 窗口最小化或不可见时直接跳过抓屏（return），避免后台空转持续抓屏占用 CPU。
         同样整段包 try/except：遮挡或任何单帧异常都只跳过本帧，绝不中断预览节拍。
         """
-        if not self._detecting or not self.region:
+        if not self.region:
             return
         # 最小化/不可见时不抓屏：既省 CPU，也避免取到被遮挡的退化画面
         if self.isMinimized() or not self.isVisible():
@@ -1778,15 +1914,28 @@ class MainWindow(QMainWindow):
             else:
                 best_info = self._best_debug_info(debug)
                 if best_info:
-                    detail = (f"监控中，当前未检测到任何图案（{now}）\n"
-                              f"最接近：{best_info['name']} 得分 {best_info['best_score']:.2f} "
-                              f"/ 阈值 {best_info['threshold']:.2f}")
+                    detail = (f"监控中（仅图案）：未命中；最接近 "
+                              f"{best_info['name']} {best_info['best_score']:.2f}/"
+                              f"{best_info['threshold']:.2f}（{now}）")
                 else:
-                    detail = f"监控中，当前未检测到任何图案（{now}）"
+                    detail = f"监控中（仅图案）：未命中（{now}）"
                 self._set_hit_status("⚪ 未命中", "#607d8b", detail)
-        # —— 响铃状态机（图案/文字统一）：暂停响铃 + 手动恢复 ——
+        # —— 响铃状态机（图案/文字统一）：暂停响铃 + 可切换的『手动/自动恢复』 ——
+        # 响铃恢复方式（ring_resume_mode）：
+        #   0 手动恢复：暂停后必须手动点『启动响铃』才恢复。
+        #   1 新命中自动恢复：暂停只压制"当前这一轮持续命中"；当目标消失后再出现（新一轮命中 = 上升沿）自动解除暂停并重新响铃，不漏新事件。
+        #   2 自定义秒数后自动解除：暂停起 N 秒倒计时到点自动解除暂停（定时器在 _pause_ring 启动，N 由用户自定义）；若届时仍有目标命中会立即重新响铃。
+        #   3 命中跟随：响铃严格跟随命中状态——命中即响、消失即停；手动暂停后下一次命中自动恢复。
+        # 命中跟随模式：命中时强制解除暂停，确保"命中关闭静音、开始播放提示音"
+        if self.ring_resume_mode == 3 and matched:
+            self.paused = False
+            self._stop_resume_timer()
+        rising = matched and not self._prev_matched
         if matched and not self.alerting:
-            # 上升沿：开始响铃（按命中来源确定对应提示音）
+            # 上升沿 / 暂停中的同一轮命中：开始响铃（按命中来源确定对应提示音）
+            if self.paused and self.ring_resume_mode == 1 and rising:
+                # 自动恢复：新一轮命中自动解除暂停
+                self.paused = False
             if not self.paused:
                 self.alerting = True
                 ring_name, ring_path = self._resolve_ring_sound(mode, results, matched_list)
@@ -1811,33 +1960,44 @@ class MainWindow(QMainWindow):
                     self._set_ring_button("ringing")
                     self._log(f"触发响铃(文字优先): {', '.join(matched_list)}")
             else:
-                # 当前处于暂停期：只显示命中状态但不响铃、不弹反馈、不重复记录
+                # 处于暂停期：只显示命中状态但不响铃、不弹反馈、不重复记录
+                if self.ring_resume_mode == 1:
+                    auto_note = "（自动恢复模式下，目标消失再出现将自动解除暂停并响铃）"
+                elif self.ring_resume_mode == 2:
+                    auto_note = f"（暂停 {self.ring_resume_seconds} 秒后自动解除暂停，或点击『启动响铃』立即恢复）"
+                else:
+                    auto_note = "（点击『启动响铃』可继续）"
                 if pure_text or not results:
                     self._set_hit_status("🟡 命中（已暂停）", "#1565c0",
-                                         f"检测到文字 {', '.join(matched_list)}，但已暂停响铃；点击『启动响铃』可继续。")
+                                         f"检测到文字 {', '.join(matched_list)}，但已暂停响铃。{auto_note}")
                 else:
                     best = results[0]
                     source_tag = "图案" if mode == 0 else "图案兜底"
                     self._set_hit_status("🟡 命中（已暂停）", "#1565c0",
-                                         f"{source_tag}命中 {best.name}（{best.score:.2f}）+ 文字，但已暂停响铃；点击『启动响铃』可继续。")
+                                         f"{source_tag}命中 {best.name}（{best.score:.2f}）+ 文字，但已暂停响铃。{auto_note}")
         elif self.alerting and not matched:
-            # 下降沿：目标消失 -> 自动停铃（暂停状态保持不变，等待用户手动恢复）
+            # 下降沿：目标消失 -> 自动停铃；自动恢复模式下同时清除暂停，等待下一轮新命中
             self.sound.stop()
             if self.beep_timer:
                 self.beep_timer.stop()
             self.alerting = False
+            if self.ring_resume_mode == 1:
+                self.paused = False
             self._set_ring_button("paused" if self.paused else "idle")
         elif self.alerting and matched:
             # 持续检测到：保持响铃（beep 由定时器负责）
             pass
         elif not matched:
-            # 持续未命中：若仍在响铃则停铃；暂停状态保持不变，等待用户手动恢复
+            # 持续未命中：若仍在响铃则停铃；自动恢复模式下清除暂停（手动模式保持暂停，等待手动恢复）
             if self.alerting:
                 self.sound.stop()
                 if self.beep_timer:
                     self.beep_timer.stop()
                 self.alerting = False
+            if self.ring_resume_mode == 1 and self.paused:
+                self.paused = False
             self._set_ring_button("paused" if self.paused else "idle")
+        self._prev_matched = matched
 
     def _start_beep(self, sound_name=None, custom_path=""):
         """开始响铃。sound_name/custom_path 指定本次响铃的声音（不同图案/文字可不同）；
@@ -1885,7 +2045,7 @@ class MainWindow(QMainWindow):
         return self._get_sound_args()
 
     def _pause_ring(self):
-        """暂停响铃：立即消音但保持监控，等待用户手动点『启动响铃』才恢复。"""
+        """暂停响铃：立即消音但保持监控。按当前恢复模式决定后续：手动需点按钮；新命中自动靠下降沿；N秒自动靠定时器。"""
         self.sound.stop()          # 立即消音（杀掉正在播放/尾音）
         if self.beep_timer:
             self.beep_timer.stop()
@@ -1893,22 +2053,35 @@ class MainWindow(QMainWindow):
         self.paused = True
         self.feedback_card.hide()
         self._set_ring_button("paused")   # 按钮变为可点的蓝色"启动响铃"
+        if self.ring_resume_mode == 1:
+            note = "目标消失再出现将自动恢复响铃"
+        elif self.ring_resume_mode == 2:
+            note = f"{self.ring_resume_seconds} 秒后自动解除暂停并恢复响铃"
+            self._start_resume_timer()
+        elif self.ring_resume_mode == 3:
+            note = "下一次命中将自动恢复响铃"
+        else:
+            note = "需点击『启动响铃』手动恢复"
         self._set_hit_status("⏸ 已暂停响铃", "#1565c0",
-                             "已暂停响铃；点击『启动响铃』可继续，恢复后下次命中将重新响铃。")
-        self._log("用户暂停响铃 -> 暂停至手动恢复")
+                             f"已暂停响铃；{note}，或点击『启动响铃』立即恢复。")
+        mode_name = {0: "手动恢复", 1: "新命中自动恢复", 2: f"{self.ring_resume_seconds}秒后自动恢复", 3: "命中跟随"}[self.ring_resume_mode]
+        self._log("用户暂停响铃 -> " + mode_name)
 
     def _reset_ring(self):
         """彻底重置响铃/暂停状态（停止检测或重新开始时调用）。"""
         self.sound.stop()
         if self.beep_timer:
             self.beep_timer.stop()
+        self._stop_resume_timer()
         self.alerting = False
         self.paused = False
+        self._prev_matched = False
         self.feedback_card.hide()
         self.current_feedback = None
 
     def _resume_ring(self):
         """手动启动响铃：解除暂停，后续命中将正常响铃（下一次检测节拍即生效）。"""
+        self._stop_resume_timer()
         self.paused = False
         self._set_ring_button("idle")
         self._set_hit_status("监控中", "#1565c0", "已启动响铃；等待命中…")
@@ -1920,6 +2093,58 @@ class MainWindow(QMainWindow):
             self._resume_ring()
         else:
             self._pause_ring()
+
+    def _start_resume_timer(self):
+        """启动 N 秒倒计时，到点自动解除暂停（仅 mode==2 使用，N 由 ring_resume_seconds 决定）。"""
+        self._stop_resume_timer()
+        self._resume_timer = QTimer(self)
+        self._resume_timer.setSingleShot(True)
+        self._resume_timer.timeout.connect(self._on_resume_timeout)
+        self._resume_timer.start(max(1000, self.ring_resume_seconds * 1000))
+
+    def _stop_resume_timer(self):
+        """停止并销毁 10 秒自动解除暂停定时器（若存在）。"""
+        if self._resume_timer is not None:
+            try:
+                self._resume_timer.stop()
+            except Exception:
+                pass
+            self._resume_timer = None
+
+    def _on_resume_timeout(self):
+        """N 秒到点：自动解除暂停（若此刻有目标命中，下一帧检测会立即重新响铃）。"""
+        self._resume_timer = None
+        if not self.paused:
+            return
+        self.paused = False
+        self._set_ring_button("idle")
+        self._set_hit_status("监控中", "#1565c0", f"{self.ring_resume_seconds} 秒已到，已自动解除暂停；等待命中…")
+        self._log(f"{self.ring_resume_seconds} 秒自动解除暂停")
+
+    def _on_ring_mode_changed(self, index: int):
+        """『暂停后恢复方式』下拉：切换恢复模式并即时持久化；同步启用/禁用秒数输入。"""
+        self.ring_resume_mode = index
+        self.spin_ring_seconds.setEnabled(index == 2)
+        # 切到『新命中自动恢复』且当前处于『无命中却仍暂停』的陈旧状态，顺手清除，避免一直静音
+        if index == 1 and not self._prev_matched and self.paused:
+            self.paused = False
+            self._set_ring_button("idle")
+        # 离开『自定义秒数后恢复』模式时，若正挂着倒计时则取消（避免后续误触发）
+        if index != 2:
+            self._stop_resume_timer()
+        # 切到『自定义秒数后恢复』且当前已处于暂停，立即启动倒计时（秒数可能已变）
+        if index == 2 and self.paused:
+            self._start_resume_timer()
+        self._save_config()
+
+    def _on_ring_seconds_changed(self, value: int):
+        """自定义秒数输入：更新值并即时持久化；若当前正处于 mode==2 的暂停倒计时，重启倒计时以应用新秒数。"""
+        self.ring_resume_seconds = max(1, min(600, int(value)))
+        if self.ring_resume_mode == 2 and self.paused:
+            self._start_resume_timer()
+            self._set_hit_status("⏸ 已暂停响铃", "#1565c0",
+                                 f"已暂停响铃；{self.ring_resume_seconds} 秒后自动解除暂停并恢复响铃，或点击『启动响铃』立即恢复。")
+        self._save_config()
 
     def _show_feedback_card(self, name, score, crop):
         """在主窗口右侧显示命中确认卡片（替代独立弹窗）。"""

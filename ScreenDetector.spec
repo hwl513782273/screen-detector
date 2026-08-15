@@ -1,12 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 # 框选屏幕检测工具 打包配置（macOS .app）
 import os
-# 兼容构建开关（不影响默认 v6.47 的 arm64 构建）：
+# 兼容构建开关（不影响默认 v6.48 的 arm64 构建）：
 #   COMPAT_ARCH      : EXE 的目标架构，默认 None（跟随当前机器=arm64）；兼容包设 'x86_64'
-#   COMPAT_VERSION   : CFBundleShortVersionString，默认 '6.47'
+#   COMPAT_VERSION   : CFBundleShortVersionString，默认 '6.48'
 #   COMPAT_MIN_SYS   : LSMinimumSystemVersion，默认 '10.15'
 COMPAT_ARCH = os.environ.get("COMPAT_ARCH", None)
-COMPAT_VERSION = os.environ.get("COMPAT_VERSION", "6.47")
+COMPAT_VERSION = os.environ.get("COMPAT_VERSION", "6.48")
 COMPAT_MIN_SYS = os.environ.get("COMPAT_MIN_SYS", "10.15")
 from PyInstaller.utils.hooks import collect_submodules
 
