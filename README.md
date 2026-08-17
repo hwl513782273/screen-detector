@@ -7,6 +7,8 @@
 >
 > **许可证 License：MIT**（详见 [LICENSE](https://github.com/hwl513782273/screen-detector/blob/main/LICENSE)）。可自由使用、修改与再分发，须保留版权与许可声明。
 
+![框选屏幕检测工具图标](app-icon-96.png)
+
 [下载最新版 / Download](https://github.com/hwl513782273/screen-detector/releases/latest) · [问题反馈 / Issues](https://github.com/hwl513782273/screen-detector/issues)
 
 ---
