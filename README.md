@@ -139,6 +139,18 @@ Compatibility packages are built from the same source via `COMPAT_ARCH` / `COMPA
 | 文字检测 / Text | Apple Vision OCR | 多组「目标文字 + 独立提示音」；按检测间隔持续 OCR |
 | 变化检测 / Change | 帧差比对 / frame diff | 监控区内容变化实时标注，配合学习反馈记录 |
 
+## 差异化亮点 / Why this tool
+
+同类「屏幕区域监控 + 命中提醒」工具通常只做图案模板匹配。本工具在以下几个维度做了增强：
+
+- **文字检测**：基于 Apple Vision OCR，可直接监控「某段文字出现即响铃」，无需先截一张图当模板。
+- **命中反馈自学习**：对每个响铃标记「命中 / 误报」，自动调阈值、精炼模板，数据落盘并跨会话累积，越用越准。
+- **三种匹配模式**：`仅图案` / `仅文字` / `文字优先·图案兜底`，多勾选图案之间为「或」关系，灵活适配不同场景。
+- **响铃开关 + 参与控制**：可「⏸ 暂停响铃 / ▶ 启动响铃」，每个模板可单独勾选是否参与检测，避免无关图案干扰。
+- **原生 macOS 分发**：arm64（macOS 11 / 12）+ x86_64（macOS 10.15）三架构 DMG，内置屏幕录制（TCC）权限处理，拖入「应用程序」即用。
+
+> 市面上已有一些开源的同思路工具，但把「图案匹配 + 文字 OCR + 自学习反馈 + 多模式」整合进单个原生 macOS 应用的方案并不多见。
+
 ## 隐私与安全 / Privacy and security
 
 - 全部检测在**本地**完成，不联网、不上传任何屏幕截图或模板数据。 / All detection runs **locally**; nothing is uploaded to a cloud service.
