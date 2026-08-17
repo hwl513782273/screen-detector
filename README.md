@@ -73,15 +73,15 @@ git push origin main --tags
 > 仓库「发行版 / Releases」的命名格式为：`支持最低版本-ScreenDetector-架构`（如 `11.0-ScreenDetector-arm64.dmg`）。
 
 
-### 支持的检测类型 / Supported detection types
+### 支持的检测类型
 
-| 类型 / Type | 引擎 / Engine | 说明 / Notes |
+| 类型 | 引擎 | 说明 |
 |---|---|---|
-| 图案模板匹配 / Pattern | OpenCV `matchTemplate` | 多模板「或」关系，可逐项勾选参与；支持命中反馈自学习精炼 |
-| 文字检测 / Text | Apple Vision OCR | 多组「目标文字 + 独立提示音」；按检测间隔持续 OCR |
-| 变化检测 / Change | 帧差比对 / frame diff | 监控区内容变化实时标注，配合学习反馈记录 |
+| 图案模板匹配 | OpenCV `matchTemplate` | 多模板「或」关系，可逐项勾选参与；支持命中反馈自学习精炼 |
+| 文字检测 | Apple Vision OCR | 多组「目标文字 + 独立提示音」；按检测间隔持续 OCR |
+| 变化检测 | 帧差比对 | 监控区内容变化实时标注，配合学习反馈记录 |
 
-### 差异化亮点 / Why this tool
+### 差异化亮点
 
 同类「屏幕区域监控 + 命中提醒」工具通常只做图案模板匹配。本工具在以下几个维度做了增强：
 
@@ -151,6 +151,26 @@ git push origin main --tags
 Compatibility packages are built from the same source via `COMPAT_ARCH` / `COMPAT_MIN_SYS` with zero source changes. All installers are **unsigned and unnotarized**, so Gatekeeper may warn; right-click “Open” on first launch. All three architectures passed offline-launch smoke tests and real-sample regressions.
 
 > Release asset naming: `min-version-ScreenDetector-arch` (e.g. `11.0-ScreenDetector-arm64.dmg`).
+
+### Supported detection types
+
+| Type | Engine | Notes |
+|---|---|---|
+| Pattern | OpenCV `matchTemplate` | Multiple templates are OR-combined; per-template enable checkbox; hit-feedback self-learning refines templates |
+| Text | Apple Vision OCR | Multiple "target text + dedicated sound" groups; continuous OCR on the detect interval |
+| Change | frame diff | Live annotation of region changes, paired with the learning feedback log |
+
+### Why this tool
+
+Most "screen region monitoring + alert" tools only do pattern template matching. This tool adds enhancements in several dimensions:
+
+- **Text detection**: powered by Apple Vision OCR, it alerts when specific text appears — no need to first capture a screenshot as a template.
+- **Hit-feedback self-learning**: mark each ring "hit / false-alarm" to auto-tune thresholds and refine templates; data persists and accumulates across sessions, getting more accurate over time.
+- **Three match modes**: `Pattern only` / `Text only` / `Text first, pattern fallback`; multiple enabled patterns are OR-combined, adapting flexibly to different scenarios.
+- **Bell switch + participation control**: "⏸ Mute / ▶ Resume" keeps monitoring while silenced, and each template can be individually toggled in or out of detection to avoid noise.
+- **Native macOS distribution**: arm64 (macOS 11 / 12) + x86_64 (macOS 10.15) DMG builds, with built-in Screen Recording (TCC) permission handling — drag into Applications and it just works.
+
+> There are open-source tools with a similar idea, but few integrate "pattern matching + text OCR + self-learning feedback + multi-mode" into a single native macOS app.
 
 ---
 
